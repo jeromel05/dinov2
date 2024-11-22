@@ -227,3 +227,86 @@ class ShardedInfiniteSampler(Sampler):
             )
             yield from iterable
             self._iter_count += 1
+
+
+class ShardedInfiniteChannelSampler(Sampler):
+
+    def __init__(
+        self,
+        *,
+        sample_count: int,
+        datasets_sizes: int,
+        shuffle: bool = False,
+        seed: int = 0,
+        start: Optional[int] = None,
+        step: Optional[int] = None,
+        advance: int = 0,
+        use_new_shuffle_tensor_slice: bool = False,
+    ):
+        self._sample_count = sample_count  # = len(dataset)
+        self._seed = seed
+        self._shuffle = shuffle
+        self._start = distributed.get_global_rank() if start is None else start
+        self._step = distributed.get_global_size() if step is None else step
+        self._advance = advance
+        self._iter_count = 0
+        self._shuffle_tensor_slice_fn = (
+            _new_shuffle_tensor_slice if use_new_shuffle_tensor_slice else _shuffle_tensor_slice
+        )
+        self._dataset_idx = 0
+        self._datasets_sizes = datasets_sizes
+
+    def __iter__(self):
+        iter_count = self._advance // self._sample_count
+        if iter_count > 0:
+            self._advance -= iter_count * self._sample_count
+            self._iter_count += iter_count
+
+        if self._shuffle:
+            iterator = self._shuffled_iterator()
+        else:
+            iterator = self._iterator()
+
+        self._dataset_idx += 1
+        self._dataset_idx %= self._datasets_count
+        yield from itertools.islice(iterator, self._advance, None)
+
+    def _iterator(self):
+        assert not self._shuffle
+
+        while True:
+            iterable = range(self._sample_count)
+            yield from itertools.islice(iterable, self._start, None, self._step)
+
+    def _shuffled_iterator(self):
+        assert self._shuffle
+
+        # Instantiate a generator here (rather than in the ctor) to be keep the class
+        # picklable (requirement of mp.spawn)
+        generator = torch.Generator()
+
+        # Always shuffle everything first
+        generator.manual_seed(self._seed)
+        dtype = _get_torch_dtype(self._sample_count)
+
+        perm = torch.randperm(
+            self._datasets_sizes[self._dataset_idx],
+            dtype=dtype,
+            generator=generator,
+        )
+        if self._dataset_idx > 0:
+            perm += self._datasets_sizes[self._dataset_idx - 1]
+
+        while True:
+            # Re-seed on each iteration to allow skipping whole permutations
+            seed = _make_seed(self._seed, self._start, self._iter_count)
+            generator.manual_seed(seed)
+
+            iterable = self._shuffle_tensor_slice_fn(
+                tensor=perm,
+                start=self._start,
+                step=self._step,
+                generator=generator,
+            )
+            yield from iterable
+            self._iter_count += 1

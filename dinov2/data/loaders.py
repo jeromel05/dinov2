@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import Sampler
 
 from .datasets import ImageNet, ImageNet22k
-from .samplers import EpochSampler, InfiniteSampler, ShardedInfiniteSampler
+from .samplers import EpochSampler, InfiniteSampler, ShardedInfiniteChannelSampler, ShardedInfiniteSampler
 
 
 logger = logging.getLogger("dinov2")
@@ -23,6 +23,7 @@ class SamplerType(Enum):
     INFINITE = 2
     SHARDED_INFINITE = 3
     SHARDED_INFINITE_NEW = 4
+    SHARDED_INFINITE_CHANNEL = 5
 
 
 def _make_bool_str(b: bool) -> str:
@@ -118,19 +119,29 @@ def _make_sampler(
             seed=seed,
             advance=advance,
         )
-    elif type in (SamplerType.SHARDED_INFINITE, SamplerType.SHARDED_INFINITE_NEW):
+    elif type in (SamplerType.SHARDED_INFINITE, SamplerType.SHARDED_INFINITE_NEW, SamplerType.SHARDED_INFINITE_CHANNEL):
         logger.info("sampler: sharded infinite")
         if size > 0:
             raise ValueError("sampler size > 0 is invalid")
         # TODO: Remove support for old shuffling
         use_new_shuffle_tensor_slice = type == SamplerType.SHARDED_INFINITE_NEW
-        return ShardedInfiniteSampler(
-            sample_count=sample_count,
-            shuffle=shuffle,
-            seed=seed,
-            advance=advance,
-            use_new_shuffle_tensor_slice=use_new_shuffle_tensor_slice,
-        )
+        if type == SamplerType.SHARDED_INFINITE_CHANNEL:
+            return ShardedInfiniteChannelSampler(
+                sample_count=sample_count,
+                datasets_sizes=dataset._file_len_list,
+                shuffle=shuffle,
+                seed=seed,
+                advance=advance,
+                use_new_shuffle_tensor_slice=use_new_shuffle_tensor_slice,
+            )
+        else:
+            return ShardedInfiniteSampler(
+                sample_count=sample_count,
+                shuffle=shuffle,
+                seed=seed,
+                advance=advance,
+                use_new_shuffle_tensor_slice=use_new_shuffle_tensor_slice,
+            )
     elif type == SamplerType.EPOCH:
         logger.info("sampler: epoch")
         if advance > 0:

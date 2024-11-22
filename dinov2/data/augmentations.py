@@ -24,12 +24,14 @@ class DataAugmentationDINO(object):
         local_crops_number,
         global_crops_size=224,
         local_crops_size=96,
+        use_variable_channels=False,
     ):
         self.global_crops_scale = global_crops_scale
         self.local_crops_scale = local_crops_scale
         self.local_crops_number = local_crops_number
         self.global_crops_size = global_crops_size
         self.local_crops_size = local_crops_size
+        self.use_variable_channels = use_variable_channels
 
         logger.info("###################################")
         logger.info("Using data augmentation parameters:")
@@ -38,6 +40,7 @@ class DataAugmentationDINO(object):
         logger.info(f"local_crops_number: {local_crops_number}")
         logger.info(f"global_crops_size: {global_crops_size}")
         logger.info(f"local_crops_size: {local_crops_size}")
+        logger.info(f"use_variable_channels: {use_variable_channels}")
         logger.info("###################################")
 
         # random resized crop and flip
@@ -89,9 +92,17 @@ class DataAugmentationDINO(object):
             ]
         )
 
-        self.global_transfo1 = transforms.Compose([color_jittering, global_transfo1_extra, self.normalize])
-        self.global_transfo2 = transforms.Compose([color_jittering, global_transfo2_extra, self.normalize])
-        self.local_transfo = transforms.Compose([color_jittering, local_transfo_extra, self.normalize])
+        global_transfo_1_list = [global_transfo1_extra, self.normalize]
+        global_transfo_2_list = [global_transfo2_extra, self.normalize]
+        local_transfo_list = [local_transfo_extra, self.normalize]
+
+        if not self.use_variable_channels:
+            global_transfo_1_list.insert(0, color_jittering)
+            global_transfo_2_list.insert(0, color_jittering)
+            local_transfo_list.insert(0, color_jittering)
+        self.global_transfo1 = transforms.Compose(global_transfo_1_list)
+        self.global_transfo2 = transforms.Compose(global_transfo_2_list)
+        self.local_transfo = transforms.Compose(local_transfo_list)
 
     def __call__(self, image):
         output = {}

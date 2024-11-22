@@ -95,9 +95,9 @@ def build_schedulers(cfg):
     teacher_temp_schedule = CosineScheduler(**teacher_temp)
     last_layer_lr_schedule = CosineScheduler(**lr)
 
-    last_layer_lr_schedule.schedule[
-        : cfg.optim["freeze_last_layer_epochs"] * OFFICIAL_EPOCH_LENGTH
-    ] = 0  # mimicking the original schedules
+    last_layer_lr_schedule.schedule[: cfg.optim["freeze_last_layer_epochs"] * OFFICIAL_EPOCH_LENGTH] = (
+        0  # mimicking the original schedules
+    )
 
     logger.info("Schedulers ready.")
 
@@ -178,6 +178,7 @@ def do_train(cfg, model, resume=False):
         cfg.crops.local_crops_number,
         global_crops_size=cfg.crops.global_crops_size,
         local_crops_size=cfg.crops.local_crops_size,
+        use_variable_channels=cfg.crops.use_variable_channels,
     )
 
     collate_fn = partial(
@@ -190,14 +191,16 @@ def do_train(cfg, model, resume=False):
     )
 
     # setup data loader
-
     dataset = make_dataset(
         dataset_str=cfg.train.dataset_path,
         transform=data_transform,
         target_transform=lambda _: (),
     )
     # sampler_type = SamplerType.INFINITE
-    sampler_type = SamplerType.SHARDED_INFINITE
+    if cfg.crops.use_variable_channels:
+        sampler_type = SamplerType.SHARDED_INFINITE_CHANNEL
+    else:
+        sampler_type = SamplerType.SHARDED_INFINITE
     data_loader = make_data_loader(
         dataset=dataset,
         batch_size=cfg.train.batch_size_per_gpu,
@@ -211,7 +214,6 @@ def do_train(cfg, model, resume=False):
     )
 
     # training loop
-
     iteration = start_iter
 
     logger.info("Starting training from iteration {}".format(start_iter))
@@ -231,7 +233,6 @@ def do_train(cfg, model, resume=False):
             return
 
         # apply schedules
-
         lr = lr_schedule[iteration]
         wd = wd_schedule[iteration]
         mom = momentum_schedule[iteration]
@@ -240,12 +241,10 @@ def do_train(cfg, model, resume=False):
         apply_optim_scheduler(optimizer, lr, wd, last_layer_lr)
 
         # compute losses
-
         optimizer.zero_grad(set_to_none=True)
         loss_dict = model.forward_backward(data, teacher_temp=teacher_temp)
 
         # clip gradients
-
         if fp16_scaler is not None:
             if cfg.optim.clip_grad:
                 fp16_scaler.unscale_(optimizer)
@@ -260,11 +259,9 @@ def do_train(cfg, model, resume=False):
             optimizer.step()
 
         # perform teacher EMA update
-
         model.update_teacher(mom)
 
         # logging
-
         if distributed.get_global_size() > 1:
             for v in loss_dict.values():
                 torch.distributed.all_reduce(v)
